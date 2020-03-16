@@ -1,13 +1,17 @@
 package replayer
 
 import (
-	"mongoshake/common"
-	"mongoshake/modules"
-	"mongoshake/oplog"
-	"mongoshake/tunnel"
+    "mongoshake/common"
+    "mongoshake/modules"
+    "mongoshake/oplog"
+    "mongoshake/tunnel"
+	"encoding/json"
+	"time"
+	
+    LOG "github.com/vinllen/log4go"
+    "github.com/vinllen/mgo/bson"
+    "github.com/Shopify/sarama"
 
-	LOG "github.com/vinllen/log4go"
-	"github.com/vinllen/mgo/bson"
 )
 
 const (
@@ -79,7 +83,7 @@ func (er *ExampleReplayer) Sync(message *tunnel.TMessage, completion func()) int
 		var err error
 		if er.compressor, err = module.GetCompressorById(message.Compress); err != nil {
 			er.Retransmit = true
-			LOG.Critical("Tunnel message compressor not support. is %d", message.Compress)
+			LOG.Critical("Tunnel message compressor nohandlert support. is %d", message.Compress)
 			return tunnel.ReplyCompressorNotSupported
 		}
 		var decompress [][]byte
@@ -128,6 +132,37 @@ func (er *ExampleReplayer) handler() {
 			}
 			oplogs[i].RawSize = len(raw)
 			LOG.Info(oplogs[i]) // just print for test, users can modify to fulfill different needs
+			//*************************************user code************************************************
+			//put oplog data to kafka
+			address := []string{"192.168.4.56:9092"}
+			topic := "mongodb-data"
+
+			config := sarama.NewConfig()
+			config.Producer.Return.Successes = true
+			config.Producer.Timeout = 5 * time.Second
+			p, err := sarama.NewSyncProducer(address, config)
+			if err != nil {
+				LOG.Error("sarama.NewSyncProducer err, message=%s \n", err)
+				return
+			}
+			defer p.Close()		
+	
+			value, err0 := json.Marshal(oplogs[i])			
+			if err0 != nil {
+				LOG.Error("format json message(%s) err=%s \n", value, err0)
+				return
+			}
+			msg := &sarama.ProducerMessage{
+				Topic:topic,
+				Value:sarama.StringEncoder(value),
+			}
+			part, offset, err := p.SendMessage(msg)
+			if err != nil {
+				LOG.Error("send message(%s) err=%s ;part=s%,offset=s%\n", value, err,part, offset)
+			}else {
+				LOG.Debug("send successfully")
+			}
+			//*************************************user code************************************************
 		}
 
 		if callback := msg.completion; callback != nil {
